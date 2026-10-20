@@ -17,9 +17,34 @@ jobs:
       - name: Run enhancement unit tests
         run: ./gradlew :app:testStandardDebugUnitTest --tests "eu.kanade.tachiyomi.ui.reader.enhancement.*" --no-daemon
       - name: Locate APK
-        run: find app/build/outputs/apk -type f -name '*.apk' -exec ls -lh {} \;
-      - uses: actions/upload-artifact@v4
+        id: locate
+        run: |
+          APK=$(find app/build/outputs/apk/standard -type f -name '*.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "No APK found under app/build/outputs/apk/standard" >&2
+            find app/build/outputs/apk -type f -name '*.apk' -exec ls -lh {} \; || true
+            exit 1
+          fi
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "Found: $APK ($(du -h "$APK" | cut -f1))"
+      - name: Upload artifact (single APK)
+        uses: actions/upload-artifact@v4
         with:
-          name: yokai-debug-apk
-          path: app/build/outputs/apk/**/*.apk
+          name: yokai-sr-debug.apk
+          path: ${{ steps.locate.outputs.path }}
           if-no-files-found: error
+      - name: Create Release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "sr-base-${{ github.run_number }}"
+          name: "Yokai SR Base v${{ github.run_number }}"
+          body: |
+            Basic verification APK with enhancement cache primitives.
+            No AI inference yet - foundation only.
+            Branch: feature/local-super-resolution
+            Commit: ${{ github.sha }}
+          files: ${{ steps.locate.outputs.path }}
+          draft: false
+          prerelease: true
+          fail_on_invalid_exe_signature: false
