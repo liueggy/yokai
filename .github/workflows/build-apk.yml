@@ -16,9 +16,10 @@ jobs:
         run: ./gradlew :app:assembleStandardDebug --no-daemon --max-workers=2
       - name: Run enhancement unit tests
         run: ./gradlew :app:testStandardDebugUnitTest --tests "eu.kanade.tachiyomi.ui.reader.enhancement.*" --no-daemon
+      - name: Locate APK
+        run: find app/build/outputs/apk -type f -name '*.apk' -exec ls -lh {} \;
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: yokai-debug.apk
-          path: app/build/outputs/apk/standard/debug/app-standard-debug.apk
-          if-no-files-found: ignore
+          name: yokai-debug-apk
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
