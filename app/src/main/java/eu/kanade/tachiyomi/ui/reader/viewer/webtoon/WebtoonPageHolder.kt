@@ -13,7 +13,9 @@ import androidx.core.view.updateMargins
 import co.touchlab.kermit.Logger
 import com.davemorrissey.labs.subscaleview.SubsamplingScaleImageView
 import eu.kanade.tachiyomi.databinding.ReaderErrorBinding
+import eu.kanade.tachiyomi.data.preference.PreferencesHelper
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementRuntime
 import eu.kanade.tachiyomi.ui.reader.model.ReaderPage
 import eu.kanade.tachiyomi.ui.reader.viewer.ReaderErrorView
 import eu.kanade.tachiyomi.ui.reader.viewer.ReaderPageImageView
@@ -24,6 +26,7 @@ import eu.kanade.tachiyomi.util.system.launchIO
 import eu.kanade.tachiyomi.util.system.withIOContext
 import eu.kanade.tachiyomi.util.system.withUIContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.collectLatest
@@ -31,6 +34,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import okio.Buffer
 import okio.BufferedSource
+import uy.kohesive.injekt.injectLazy
+import yokai.domain.ui.settings.ReaderPreferences
 
 /**
  * Holder of the webtoon reader for a single page of a chapter.
@@ -72,6 +77,13 @@ class WebtoonPageHolder(
     private var page: ReaderPage? = null
 
     private val scope = MainScope()
+
+    /** Latest enhancement attempt for this holder; cancelled when another page starts loading. */
+    private var enhancementJob: Job? = null
+
+    private val preferences by injectLazy<PreferencesHelper>()
+
+    private val readerPreferences by lazy { ReaderPreferences(preferences.preferenceStore) }
 
     /**
      * Job for loading the page.
@@ -188,6 +200,10 @@ class WebtoonPageHolder(
                 val isAnimated = ImageUtil.isAnimatedAndSupported(source)
                 Pair(source, isAnimated)
             }
+
+            // Peek keeps the display stream intact; enhancement needs the same encoded bytes.
+            val enhancementBytes = if (isAnimated) null else runCatching { source.peek().readByteArray() }.getOrNull()
+
             withUIContext {
                 frame.setImage(
                     source,
@@ -203,6 +219,8 @@ class WebtoonPageHolder(
                 )
                 removeErrorLayout()
             }
+
+            enhancementBytes?.let { requestEnhancement(it) }
         } catch (e: Throwable) {
             val logMsg = "Failed to set reader page image"
             if (e is CancellationException)
@@ -211,6 +229,35 @@ class WebtoonPageHolder(
                 Logger.e(e) { logMsg }
             withUIContext {
                 setError()
+            }
+        }
+    }
+
+    /**
+     * Starts enhancement for the page that is already on screen.
+     *
+     * Webtoon pages keep their aspect ratio when doubled, so the strip's layout height does not
+     * change and the scroll position survives the swap. A slow or failing run leaves the original.
+     */
+    private fun requestEnhancement(pageBytes: ByteArray) {
+        if (!readerPreferences.enhancePages().get()) return
+
+        val targetPage = page ?: return
+        val renderer = EnhancementRuntime.renderer(frame.context)
+        val model = EnhancementRuntime.modelFor(readerPreferences.enhancementModel().get())
+        val denoise = readerPreferences.enhancementDenoise().get()
+
+        enhancementJob?.cancel()
+        enhancementJob = scope.launch(Dispatchers.IO) {
+            val bitmap = runCatching {
+                renderer.render(pageBytes, model, model.id, "webtoon", denoise)
+            }.getOrNull() ?: return@launch
+
+            withUIContext {
+                // The holder may already show another page; drawing then would move the strip.
+                if (page === targetPage && frame.isAttachedToWindow) {
+                    frame.setEnhancedImage(bitmap)
+                }
             }
         }
     }
