@@ -1201,4 +1201,6 @@
     <string name="crash_screen_restart_application">Restart the application</string>
 
     <string name="refresh">Refresh</string>
+    <string name="enhance_pages">Enhance page quality</string>
+    <string name="enhance_pages_summary">Upscale pages locally while reading. Off by default; heavier pages take longer.</string>
 </resources>

@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.ui.reader.viewer
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.drawable.Animatable
 import android.graphics.drawable.BitmapDrawable
@@ -61,6 +62,9 @@ open class ReaderPageImageView @JvmOverloads constructor(
 
     private var config: Config? = null
 
+    /** Set while an enhanced page is loading; applied once the new image reports ready. */
+    private var pendingViewport: Pair<Float, PointF?>? = null
+
     var onImageLoaded: (() -> Unit)? = null
     var onImageLoadError: (() -> Unit)? = null
     var onScaleChanged: ((newScale: Float) -> Unit)? = null
@@ -107,6 +111,31 @@ open class ReaderPageImageView @JvmOverloads constructor(
             prepareNonAnimatedImageView()
             setNonAnimatedImage(source, config)
         }
+    }
+
+    /**
+     * Swaps the displayed page for an enhanced (normally 2x) bitmap without moving the viewport.
+     *
+     * SubsamplingScaleImageView addresses the source image in its own pixels, so doubling the source
+     * halves the scale and doubles the centre. The restore has to wait for the new image to report
+     * ready, because loading a new image resets scale and centre to the initial fit.
+     */
+    fun setEnhancedImage(bitmap: Bitmap) {
+        val view = pageView as? SubsamplingScaleImageView ?: return
+        val previousWidth = view.sWidth
+        val previousScale = view.scale
+        val previousCenter = view.center
+        val factor = if (previousWidth > 0) bitmap.width.toFloat() / previousWidth else 1f
+
+        pendingViewport = if (previousWidth > 0 && previousScale > 0f) {
+            val restoredCenter = previousCenter?.let { PointF(it.x * factor, it.y * factor) }
+            previousScale / factor to restoredCenter
+        } else {
+            null
+        }
+
+        view.setImage(ImageSource.bitmap(bitmap))
+        isVisible = true
     }
 
     fun recycle() = pageView?.let {
@@ -216,6 +245,11 @@ open class ReaderPageImageView @JvmOverloads constructor(
                 override fun onReady() {
                     // 5x zoom
                     setupZoom(config)
+                    // Restore the pre-enhancement viewport after the new image has laid out.
+                    pendingViewport?.let { (scale, center) ->
+                        pendingViewport = null
+                        setScaleAndCenter(scale, center ?: PointF(sWidth / 2f, sHeight / 2f))
+                    }
                     this@ReaderPageImageView.onNeedsLandscapeZoom()
                     this@ReaderPageImageView.onImageLoaded()
                 }

@@ -18,6 +18,10 @@ object PreferenceKeys {
 
     const val enableTransitions = "pref_enable_transitions_key"
 
+    const val enhancePages = "pref_enhance_pages"
+    const val enhancementModel = "pref_enhancement_model"
+    const val enhancementDenoise = "pref_enhancement_denoise"
+
     const val pagerCutoutBehavior = "pager_cutout_behavior"
 
     const val doubleTapAnimationSpeed = "pref_double_tap_anim_speed"

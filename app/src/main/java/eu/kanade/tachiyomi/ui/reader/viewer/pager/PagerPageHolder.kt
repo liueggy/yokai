@@ -20,6 +20,7 @@ import eu.kanade.tachiyomi.data.preference.PreferencesHelper
 import eu.kanade.tachiyomi.databinding.ReaderErrorBinding
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.ui.reader.model.ReaderPage
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementRuntime
 import eu.kanade.tachiyomi.ui.reader.settings.ReaderBackgroundColor
 import eu.kanade.tachiyomi.ui.reader.viewer.ReaderErrorView
 import eu.kanade.tachiyomi.ui.reader.viewer.ReaderPageImageView
@@ -52,6 +53,7 @@ import kotlinx.coroutines.withContext
 import okio.Buffer
 import okio.BufferedSource
 import uy.kohesive.injekt.injectLazy
+import yokai.domain.ui.settings.ReaderPreferences
 
 /**
  * View of the ViewPager that contains a page of a chapter.
@@ -115,6 +117,12 @@ class PagerPageHolder(
     private var extraProgress: Int = 0
 
     private var scope = MainScope()
+
+    /** Latest enhancement attempt, cancelled whenever another page image starts loading. */
+    private var enhancementJob: Job? = null
+
+    private val preferences by injectLazy<PreferencesHelper>()
+    private val readerPreferences by lazy { ReaderPreferences(preferences.preferenceStore) }
 
     init {
         addView(progressIndicator)
@@ -465,6 +473,9 @@ class PagerPageHolder(
                 }
             }
 
+            // Peek leaves the stream intact for the display path below; enhancement needs the same bytes.
+            val enhancementBytes = if (isAnimated) null else runCatching { source.peek().readByteArray() }.getOrNull()
+
             withUIContext {
                 val bgColor = ReaderBackgroundColor.fromPreference(viewer.config.readerTheme)
                 if (!isAnimated) {
@@ -499,6 +510,8 @@ class PagerPageHolder(
                     }
                 }
             }
+
+            enhancementBytes?.let { requestEnhancement(it) }
         } catch (e: Throwable) {
             val logMsg = "Failed to set reader page image"
             if (e is CancellationException)
@@ -508,6 +521,30 @@ class PagerPageHolder(
             withUIContext {
                 setError()
             }
+        }
+    }
+
+    /**
+     * Starts enhancement for the page that is already on screen.
+     *
+     * The original stays visible the whole time: a slow, cancelled or failing run simply never
+     * replaces it, and a recycled holder is skipped so it cannot paint over another page.
+     */
+    private fun requestEnhancement(pageBytes: ByteArray) {
+        if (!readerPreferences.enhancePages().get()) return
+
+        val renderer = EnhancementRuntime.renderer(context)
+        val model = EnhancementRuntime.modelFor(readerPreferences.enhancementModel().get())
+        val denoise = readerPreferences.enhancementDenoise().get()
+
+        enhancementJob?.cancel()
+        enhancementJob = scope.launch(Dispatchers.IO) {
+            val bitmap = runCatching {
+                renderer.render(pageBytes, model, model.id, "page", denoise)
+            }.getOrNull() ?: return@launch
+
+            if (!isAttachedToWindow) return@launch
+            withUIContext { setEnhancedImage(bitmap) }
         }
     }
 

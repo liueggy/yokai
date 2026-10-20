@@ -48,4 +48,11 @@ class ReaderPreferences(private val preferenceStore: PreferenceStore) {
     fun webtoonDoubleTapZoomEnabled() = preferenceStore.getBoolean("pref_enable_double_tap_zoom_webtoon", true)
 
     fun debugMode() = preferenceStore.getBoolean("pref_enable_reader_debug_mode", BuildConfig.DEBUG)
+
+    /** Off by default: enhancement costs seconds of inference per page and must be opted into. */
+    fun enhancePages() = preferenceStore.getBoolean(PreferenceKeys.enhancePages, false)
+
+    fun enhancementModel() = preferenceStore.getString(PreferenceKeys.enhancementModel, "")
+
+    fun enhancementDenoise() = preferenceStore.getInt(PreferenceKeys.enhancementDenoise, 0)
 }

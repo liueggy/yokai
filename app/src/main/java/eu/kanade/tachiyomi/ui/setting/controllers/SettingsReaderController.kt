@@ -74,6 +74,12 @@ class SettingsReaderController : SettingsLegacyController() {
                 titleRes = MR.strings.animate_page_transitions
                 defaultValue = true
             }
+            switchPreference {
+                key = Keys.enhancePages
+                titleRes = MR.strings.enhance_pages
+                summaryRes = MR.strings.enhance_pages_summary
+                defaultValue = false
+            }
             intListPreference(activity) {
                 key = Keys.preloadSize
                 titleRes = MR.strings.page_preload_amount
