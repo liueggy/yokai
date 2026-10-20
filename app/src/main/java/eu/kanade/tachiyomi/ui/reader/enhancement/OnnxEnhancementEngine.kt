@@ -22,6 +22,10 @@ class OnnxEnhancementEngine(
     private val tileSize: Int = 256,
     private val halo: Int = 8,
     threads: Int = 4,
+    /** Native output multiplier of the model, e.g. 4 for Real-ESRGAN animevideov3. */
+    private val nativeScale: Int = 4,
+    /** Multiplier the reader actually wants; the native output is averaged down to this. */
+    private val targetScale: Int = 2,
 ) : EnhancementEngine, Closeable {
 
     override val id: String = "onnx-2x"
@@ -39,8 +43,8 @@ class OnnxEnhancementEngine(
     override fun enhance(input: RasterImage, options: EnhancementOptions): RasterImage {
         val width = input.width
         val height = input.height
-        val outWidth = Math.multiplyExact(width, 2)
-        val outHeight = Math.multiplyExact(height, 2)
+        val outWidth = Math.multiplyExact(width, targetScale)
+        val outHeight = Math.multiplyExact(height, targetScale)
         val output = IntArray(Math.multiplyExact(outWidth, outHeight))
 
         var y = 0
@@ -122,7 +126,12 @@ class OnnxEnhancementEngine(
         }
     }
 
-    /** Copies only the non-halo centre of the tile, in output coordinates. */
+    /**
+     * Averages the native output down to the requested scale and copies only the non-halo centre.
+     *
+     * Averaging rather than dropping pixels matters: a 4x model fed to a 2x reader would otherwise
+     * waste three quarters of its work and still alias when the extra detail is discarded.
+     */
     private fun copyTile(
         planes: Array<Array<FloatArray>>,
         output: IntArray,
@@ -134,21 +143,33 @@ class OnnxEnhancementEngine(
         haloLeft: Int,
         haloTop: Int,
     ) {
-        val tileOutHeight = tileHeight * 2
-        val tileOutWidth = tileWidth * 2
+        val block = nativeScale / targetScale
+        val samples = (block * block).toFloat()
+        val tileOutHeight = tileHeight * targetScale
+        val tileOutWidth = tileWidth * targetScale
         for (row in 0 until tileOutHeight) {
-            val modelRow = haloTop * 2 + row
-            val outRow = originY * 2 + row
-            val redPlane = planes[0][modelRow]
-            val greenPlane = planes[1][modelRow]
-            val bluePlane = planes[2][modelRow]
-            val outRowOffset = outRow * outWidth
+            val blockRow = (haloTop + row / targetScale) * nativeScale
+            val outRowOffset = (originY * targetScale + row) * outWidth
             for (column in 0 until tileOutWidth) {
-                val modelColumn = haloLeft * 2 + column
-                val r = (redPlane[modelColumn].coerceIn(0f, 1f) * 255f).toInt()
-                val g = (greenPlane[modelColumn].coerceIn(0f, 1f) * 255f).toInt()
-                val b = (bluePlane[modelColumn].coerceIn(0f, 1f) * 255f).toInt()
-                output[outRowOffset + originX * 2 + column] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                val blockColumn = (haloLeft + column / targetScale) * nativeScale
+                var red = 0f
+                var green = 0f
+                var blue = 0f
+                for (offsetY in 0 until block) {
+                    val redPlane = planes[0][blockRow + offsetY]
+                    val greenPlane = planes[1][blockRow + offsetY]
+                    val bluePlane = planes[2][blockRow + offsetY]
+                    for (offsetX in 0 until block) {
+                        red += redPlane[blockColumn + offsetX]
+                        green += greenPlane[blockColumn + offsetX]
+                        blue += bluePlane[blockColumn + offsetX]
+                    }
+                }
+                val r = (red / samples).coerceIn(0f, 1f).let { (it * 255f).toInt() }
+                val g = (green / samples).coerceIn(0f, 1f).let { (it * 255f).toInt() }
+                val b = (blue / samples).coerceIn(0f, 1f).let { (it * 255f).toInt() }
+                output[outRowOffset + originX * targetScale + column] =
+                    (0xFF shl 24) or (r shl 16) or (g shl 8) or b
             }
         }
     }

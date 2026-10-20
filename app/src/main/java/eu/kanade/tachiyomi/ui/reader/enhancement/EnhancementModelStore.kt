@@ -16,11 +16,45 @@ object EnhancementModelStore {
     private const val EXTENSION = ".onnx"
     private const val MAX_BYTES = 512L * 1024 * 1024
 
+    /**
+     * Bundled fallback model: Real-ESRGAN animevideov3 (SRVGGNetCompact, BSD-3-Clause).
+     *
+     * Weights are 1.2 MB, so shipping them costs little and the feature works out of the box.
+     * The digest is the one published by the converter, and it is also the file name on disk.
+     */
+    private const val BUNDLED_ASSET = "models/realesr-animevideov3-fp16.onnx"
+    private const val BUNDLED_SHA = "3e8ba0496441c428408c9b8f1192d956100095f4a978322aa93fcd630ce144c9"
+    private const val BUNDLED_BYTES = 1_253_495L
+
     /** The most recently imported model, or null when none was imported yet. */
-    fun modelFile(context: Context): File? = directory(context)
-        .listFiles()
-        ?.filter { it.isFile && it.name.endsWith(EXTENSION) && it.length() > 0 }
-        ?.maxByOrNull { it.lastModified() }
+    fun modelFile(context: Context): File? {
+        ensureBundled(context)
+        return directory(context)
+            .listFiles()
+            ?.filter { it.isFile && it.name.endsWith(EXTENSION) && it.length() > 0 }
+            ?.maxByOrNull { it.lastModified() }
+    }
+
+    /** Copies the bundled model out of the APK once, verifying its size before it is used. */
+    private fun ensureBundled(context: Context) {
+        val directory = directory(context)
+        val target = File(directory, "$BUNDLED_SHA.onnx")
+        if (target.isFile && target.length() == BUNDLED_BYTES) return
+
+        runCatching {
+            check(directory.isDirectory || directory.mkdirs()) { "Cannot create the model directory" }
+            val temporary = File.createTempFile("bundled-", ".tmp", directory)
+            context.assets.open(BUNDLED_ASSET).use { input ->
+                temporary.outputStream().use { output -> input.copyTo(output) }
+            }
+            if (temporary.length() != BUNDLED_BYTES) {
+                temporary.delete()
+                return
+            }
+            target.delete()
+            check(temporary.renameTo(target)) { "Cannot store the bundled model" }
+        }
+    }
 
     /**
      * Copies [uri] into private storage and returns the stored file.
