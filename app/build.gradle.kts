@@ -146,6 +146,10 @@ android {
 }
 
 dependencies {
+    // Local super resolution. ONNX Runtime ships prebuilt Android binaries, so no NDK or JNI code
+    // is needed and the model format stays portable.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+
     implementation(projects.core.archive)
     implementation(projects.core.main)
     implementation(projects.data)
@@ -302,3 +306,4 @@ tasks {
         )
     }
 }
+

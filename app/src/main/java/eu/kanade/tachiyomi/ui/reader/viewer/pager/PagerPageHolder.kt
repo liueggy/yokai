@@ -534,7 +534,7 @@ class PagerPageHolder(
         if (!readerPreferences.enhancePages().get()) return
 
         val renderer = EnhancementRuntime.renderer(context)
-        val model = EnhancementRuntime.modelFor(readerPreferences.enhancementModel().get())
+        val model = EnhancementRuntime.modelFor(context, readerPreferences.enhancementModel().get())
         val denoise = readerPreferences.enhancementDenoise().get()
 
         enhancementJob?.cancel()

@@ -244,7 +244,7 @@ class WebtoonPageHolder(
 
         val targetPage = page ?: return
         val renderer = EnhancementRuntime.renderer(frame.context)
-        val model = EnhancementRuntime.modelFor(readerPreferences.enhancementModel().get())
+        val model = EnhancementRuntime.modelFor(frame.context, readerPreferences.enhancementModel().get())
         val denoise = readerPreferences.enhancementDenoise().get()
 
         enhancementJob?.cancel()
