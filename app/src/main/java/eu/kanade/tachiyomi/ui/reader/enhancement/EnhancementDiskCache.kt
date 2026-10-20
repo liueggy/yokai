@@ -1,7 +1,11 @@
 package eu.kanade.tachiyomi.ui.reader.enhancement
 
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /** Single-process cache. Use one instance per directory. Outputs are opaque encoded bytes. */
 class EnhancementDiskCache(
@@ -58,11 +62,29 @@ class EnhancementDiskCache(
                 check(written > 0) { "Empty enhancement output" }
                 fileOutput.fd.sync()
             }
-            check(temporary.renameTo(destination)) { "Cannot commit enhancement output" }
+            commit(temporary, destination)
             destination.setLastModified(System.currentTimeMillis())
             trim()
         } finally {
             temporary.delete()
+        }
+    }
+
+    /**
+     * Atomic replacement. File.renameTo cannot overwrite on Windows, so the failure to replace an
+     * existing entry would abort every cache refresh on that platform.
+     */
+    private fun commit(temporary: File, destination: File) {
+        val source = temporary.toPath()
+        val target = destination.toPath()
+        try {
+            try {
+                Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } catch (exception: AtomicMoveNotSupportedException) {
+                Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } catch (exception: IOException) {
+            throw IllegalStateException("Cannot commit enhancement output", exception)
         }
     }
 
