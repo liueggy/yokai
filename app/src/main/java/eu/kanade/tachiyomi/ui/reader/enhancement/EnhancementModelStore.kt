@@ -22,9 +22,9 @@ object EnhancementModelStore {
      * Weights are 1.2 MB, so shipping them costs little and the feature works out of the box.
      * The digest is the one published by the converter, and it is also the file name on disk.
      */
-    private const val BUNDLED_ASSET = "models/realesr-animevideov3-fp16.onnx"
-    private const val BUNDLED_SHA = "3e8ba0496441c428408c9b8f1192d956100095f4a978322aa93fcd630ce144c9"
-    private const val BUNDLED_BYTES = 1_253_495L
+    private const val BUNDLED_ASSET = "models/realesr-animevideov3.onnx"
+    private const val BUNDLED_SHA = "78baa685a1a92cac6e14ab2af2a8ad0ef56fa48629563b1414e3a7acc54d86e2"
+    private const val BUNDLED_BYTES = 2_492_908L
 
     /** The most recently imported model, or null when none was imported yet. */
     fun modelFile(context: Context): File? {
