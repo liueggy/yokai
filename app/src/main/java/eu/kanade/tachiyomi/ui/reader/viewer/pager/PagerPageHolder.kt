@@ -20,7 +20,9 @@ import eu.kanade.tachiyomi.data.preference.PreferencesHelper
 import eu.kanade.tachiyomi.databinding.ReaderErrorBinding
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.ui.reader.model.ReaderPage
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementTrace
 import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementRuntime
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementPreviewSource
 import eu.kanade.tachiyomi.ui.reader.settings.ReaderBackgroundColor
 import eu.kanade.tachiyomi.ui.reader.viewer.ReaderErrorView
 import eu.kanade.tachiyomi.ui.reader.viewer.ReaderPageImageView
@@ -46,7 +48,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Dispatchers.Default
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -116,10 +118,16 @@ class PagerPageHolder(
     private var progress: Int = 0
     private var extraProgress: Int = 0
 
-    private var scope = MainScope()
+    private val scope = viewer.scope
 
     /** Latest enhancement attempt, cancelled whenever another page image starts loading. */
     private var enhancementJob: Job? = null
+    private var enhancementBytes: ByteArray? = null
+    private var enhancementActive = false
+    private var enhancementPrefetch = false
+    private var enhancementComplete = false
+    private var enhancementPrefetchAttempted = false
+    private var enhancementSourceVersion = 0L
 
     private val preferences by injectLazy<PreferencesHelper>()
     private val readerPreferences by lazy { ReaderPreferences(preferences.preferenceStore) }
@@ -173,12 +181,18 @@ class PagerPageHolder(
      * Called when this view is detached from the window. Unsubscribes any active subscription.
      */
     override fun onDetachedFromWindow() {
+        setEnhancementActive(false)
         super.onDetachedFromWindow()
         cancelProgressJob(1)
         cancelLoadJob(1)
         cancelProgressJob(2)
         cancelLoadJob(2)
         (pageView as? SubsamplingScaleImageView)?.setOnImageEventListener(null)
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        setEnhancementActive(viewer.isEnhancementActive(item))
     }
 
     /**
@@ -232,6 +246,7 @@ class PagerPageHolder(
     }
 
     fun onPageSelected(forward: Boolean?) {
+        setEnhancementActive(true)
         (pageView as? SubsamplingScaleImageView)?.apply {
             if (isReady) {
                 landscapeZoom(forward)
@@ -442,6 +457,10 @@ class PagerPageHolder(
      * Called when the page is ready.
      */
     private suspend fun setImage() {
+        enhancementJob?.cancel()
+        enhancementComplete = false
+        enhancementPrefetchAttempted = false
+        enhancementSourceVersion++
         progressIndicator.show()
         if (extraPage == null) {
             progressIndicator.completeAndFadeOut()
@@ -450,31 +469,15 @@ class PagerPageHolder(
         }
         errorLayout?.isVisible = false
 
-        val streamFn = page.stream ?: return
-        val streamFn2 = extraPage?.stream
-
         try {
-            val (source, isAnimated) = withIOContext {
-                streamFn().buffered(16).use { source1 ->
-                    if (extraPage != null) {
-                        streamFn2?.invoke()
-                            ?.buffered(16)
-                    } else {
-                        null
-                    }.use { source2 ->
-                        val actualSource = this@PagerPageHolder.mergeOrSplitPages(
-                            Buffer().readFrom(source1),
-                            source2?.let { Buffer().readFrom(it) },
-                        )
-
-                        val isAnimated = ImageUtil.isAnimatedAndSupported(actualSource)
-                        Pair(actualSource, isAnimated)
-                    }
-                }
-            }
+            val (source, isAnimated) = preparedImageSource() ?: return
 
             // Peek leaves the stream intact for the display path below; enhancement needs the same bytes.
-            val enhancementBytes = if (isAnimated) null else runCatching { source.peek().readByteArray() }.getOrNull()
+            val enhancementBytes = if (isAnimated || !readerPreferences.enhancePages().get()) {
+                null
+            } else {
+                runCatching { source.peek().readByteArray() }.getOrNull()
+            }
 
             withUIContext {
                 val bgColor = ReaderBackgroundColor.fromPreference(viewer.config.readerTheme)
@@ -511,7 +514,12 @@ class PagerPageHolder(
                 }
             }
 
-            enhancementBytes?.let { requestEnhancement(it) }
+            this.enhancementBytes = enhancementBytes
+            if (enhancementActive || viewer.isEnhancementActive(item)) {
+                enhancementActive = true
+                requestEnhancement()
+            }
+            viewer.updateEnhancementPrefetch()
         } catch (e: Throwable) {
             val logMsg = "Failed to set reader page image"
             if (e is CancellationException)
@@ -524,27 +532,127 @@ class PagerPageHolder(
         }
     }
 
+    private suspend fun preparedImageSource(): Pair<BufferedSource, Boolean>? {
+        val streamFn = page.stream ?: return null
+        val streamFn2 = extraPage?.stream
+        return withIOContext {
+            streamFn().buffered(16).use { source1 ->
+                (if (extraPage != null) streamFn2?.invoke()?.buffered(16) else null).use { source2 ->
+                    val source = mergeOrSplitPages(
+                        Buffer().readFrom(source1),
+                        source2?.let { Buffer().readFrom(it) },
+                    )
+                    source to ImageUtil.isAnimatedAndSupported(source)
+                }
+            }
+        }
+    }
+
+    suspend fun enhancementPreviewSource(): EnhancementPreviewSource? {
+        val (source, animated) = preparedImageSource() ?: return null
+        return withIOContext {
+            source.use {
+                if (animated) null else EnhancementPreviewSource.read(it, "page")
+            }
+        }
+    }
+
     /**
      * Starts enhancement for the page that is already on screen.
      *
      * The original stays visible the whole time: a slow, cancelled or failing run simply never
      * replaces it, and a recycled holder is skipped so it cannot paint over another page.
      */
-    private fun requestEnhancement(pageBytes: ByteArray) {
-        if (!readerPreferences.enhancePages().get()) return
+    fun setEnhancementActive(active: Boolean) {
+        enhancementActive = active
+        updateEnhancementDemand()
+    }
 
-        val renderer = EnhancementRuntime.renderer(context)
-        val model = EnhancementRuntime.modelFor(context, readerPreferences.enhancementModel().get())
+    fun setEnhancementPrefetch(prefetch: Boolean) {
+        enhancementPrefetch = prefetch
+        updateEnhancementDemand()
+    }
+
+    fun isEnhancementSettled(): Boolean = enhancementBytes != null && enhancementComplete
+
+    fun canPrefetchEnhancement(): Boolean =
+        enhancementBytes != null && !enhancementComplete && !enhancementPrefetchAttempted
+
+    private fun updateEnhancementDemand() {
+        if (!enhancementActive && !enhancementPrefetch) {
+            enhancementJob?.cancel()
+            enhancementJob = null
+        } else if (!enhancementComplete) {
+            requestEnhancement()
+        }
+    }
+
+    private fun requestEnhancement() {
+        if ((!enhancementActive && !enhancementPrefetch) || enhancementComplete || !readerPreferences.enhancePages().get()) return
+        val pageBytes = enhancementBytes ?: return
+
+        val preferredModel = readerPreferences.enhancementModel().get()
         val denoise = readerPreferences.enhancementDenoise().get()
+        val sourceVersion = enhancementSourceVersion
 
-        enhancementJob?.cancel()
-        enhancementJob = scope.launch(Dispatchers.IO) {
+        if (enhancementJob != null) return
+        val job = scope.launch(Dispatchers.IO) {
+            delay(ENHANCEMENT_DEBOUNCE_MS)
+            if ((!enhancementActive && !enhancementPrefetch) || sourceVersion != enhancementSourceVersion) return@launch
+            val prefetchOnly = !enhancementActive
             val bitmap = runCatching {
-                renderer.render(pageBytes, model, model.id, "page", denoise)
-            }.getOrNull() ?: return@launch
+                val binding = EnhancementRuntime.binding(context, preferredModel) ?: return@launch
+                // Visible requests may supply progress later; cache-only prefetch deliberately does not.
+                binding.renderer.render(
+                    pageBytes, binding.model, binding.model.id, "page", denoise,
+                    priorityRegion = withUIContext { this@PagerPageHolder.enhancementVisibleRegion() },
+                    onProgress = if (prefetchOnly) null else { partial ->
+                        var accepted = false
+                        try {
+                            withUIContext {
+                                if (enhancementActive && sourceVersion == enhancementSourceVersion &&
+                                    this@PagerPageHolder.isAttachedToWindow && readerPreferences.enhancePages().get() &&
+                                    readerPreferences.enhancementModel().get() == preferredModel
+                                ) {
+                                    this@PagerPageHolder.setEnhancedImage(partial)
+                                    accepted = true
+                                    EnhancementTrace.record("partial_display", "geometry" to "page", "page" to page.index)
+                                }
+                            }
+                        } finally {
+                            if (!accepted) partial.recycle()
+                        }
+                    },
+                )
+            }.getOrNull()
+            if (bitmap == null) {
+                if (prefetchOnly) enhancementPrefetchAttempted = true
+                return@launch
+            }
 
-            if (!isAttachedToWindow) return@launch
-            withUIContext { setEnhancedImage(bitmap) }
+            var displayed = false
+            try {
+                withUIContext {
+                    if (enhancementActive && sourceVersion == enhancementSourceVersion &&
+                        isAttachedToWindow && readerPreferences.enhancePages().get() &&
+                        readerPreferences.enhancementModel().get() == preferredModel
+                    ) {
+                        setEnhancedImage(bitmap)
+                        enhancementComplete = true
+                        displayed = true
+                        EnhancementTrace.record("display", "geometry" to "page", "page" to page.index, "width" to bitmap.width, "height" to bitmap.height)
+                        viewer.updateEnhancementPrefetch()
+                    } else if (prefetchOnly && sourceVersion == enhancementSourceVersion) {
+                        enhancementPrefetchAttempted = true
+                    }
+                }
+            } finally {
+                if (!displayed) bitmap.recycle()
+            }
+        }
+        enhancementJob = job
+        job.invokeOnCompletion {
+            if (enhancementJob === job) enhancementJob = null
         }
     }
 
@@ -930,3 +1038,5 @@ class PagerPageHolder(
         } + item.hashCode()
     }
 }
+
+private const val ENHANCEMENT_DEBOUNCE_MS = 350L

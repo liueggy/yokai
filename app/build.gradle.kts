@@ -92,6 +92,16 @@ android {
             isMinifyEnabled = true
             proguardFiles("proguard-android-optimize.txt", "proguard-rules.pro")
         }
+        // Local production-optimized upgrade of the development install; keeps its library and models.
+        create("optimized") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".debugYokai"
+            versionNameSuffix = "-enhanced"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks.add("release")
+            isDebuggable = false
+            buildConfigField("Boolean", "INCLUDE_UPDATER", "false")
+        }
         create("beta") {
             initWith(getByName("release"))
             buildConfigField("boolean", "BETA", "true")
@@ -185,6 +195,7 @@ dependencies {
     // Chucker
     debugImplementation(libs.chucker.library)
     releaseImplementation(libs.chucker.library.no.op)
+    "optimizedImplementation"(libs.chucker.library.no.op)
     "nightlyImplementation"(libs.chucker.library.no.op)
     "betaImplementation"(libs.chucker.library.no.op)
 

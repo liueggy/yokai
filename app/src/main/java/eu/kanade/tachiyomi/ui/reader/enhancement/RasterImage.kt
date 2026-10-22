@@ -20,12 +20,15 @@ class RasterImage(
 }
 
 /**
- * Model-specific processing options.
+ * Processing and transient scheduling options for one enhancement run.
  *
- * Display-only preferences (zoom, crop, reading direction) must not appear here: they do not change
- * the pixels and would needlessly invalidate every cached result.
+ * [priorityRegion] and [onProgress] only change when intermediate frames become visible. They must
+ * stay out of [EnhancementSpec] because the final pixels and disk cache identity are unchanged.
  */
 data class EnhancementOptions(
     val denoise: Int = 0,
     val quality: String = "balanced",
+    val priorityRegion: EnhancementRegion? = null,
+    val onProgress: ((RasterImage) -> Unit)? = null,
+    val checkCancellation: () -> Unit = {},
 )

@@ -26,7 +26,7 @@ class EnhancementSpecTest {
             spec.copy(geometryIdentity = "split-left"),
             spec.copy(denoise = 1),
             spec.copy(quality = "best"),
-            spec.copy(pipelineVersion = 2),
+            spec.copy(pipelineVersion = spec.pipelineVersion + 1),
         ).forEach { assertNotEquals(spec.cacheKey(), it.cacheKey()) }
         assertNotEquals(
             spec.copy(engineVersion = "a|b", geometryIdentity = "c").cacheKey(),

@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
+import android.graphics.Rect
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementRegion
 import android.graphics.drawable.Animatable
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
@@ -120,6 +122,24 @@ open class ReaderPageImageView @JvmOverloads constructor(
      * halves the scale and doubles the centre. The restore has to wait for the new image to report
      * ready, because loading a new image resets scale and centre to the initial fit.
      */
+    /** Visible source fractions, independent of decoder sampling and an earlier 2x replacement. */
+    fun enhancementVisibleRegion(): EnhancementRegion? {
+        val view = pageView as? SubsamplingScaleImageView ?: return null
+        if (!view.isReady || view.sWidth <= 0 || view.sHeight <= 0) return null
+        val visible = Rect()
+        if (!view.getLocalVisibleRect(visible)) return null
+        val start = view.viewToSourceCoord(visible.left.toFloat(), visible.top.toFloat()) ?: return null
+        val end = view.viewToSourceCoord(visible.right.toFloat(), visible.bottom.toFloat()) ?: return null
+        val left = (start.x / view.sWidth).coerceIn(0f, 1f)
+        val top = (start.y / view.sHeight).coerceIn(0f, 1f)
+        val right = (end.x / view.sWidth).coerceIn(0f, 1f)
+        val bottom = (end.y / view.sHeight).coerceIn(0f, 1f)
+        if (!left.isFinite() || !top.isFinite() || !right.isFinite() || !bottom.isFinite() ||
+            right <= left || bottom <= top
+        ) return null
+        return EnhancementRegion(left, top, right, bottom)
+    }
+
     fun setEnhancedImage(bitmap: Bitmap) {
         val view = pageView as? SubsamplingScaleImageView ?: return
         val previousWidth = view.sWidth
@@ -214,7 +234,7 @@ open class ReaderPageImageView @JvmOverloads constructor(
         data: Any,
         config: Config,
     ) = (pageView as? SubsamplingScaleImageView)?.apply {
-        setDebug(config.debugMode)
+        setDebug(false)
         setDoubleTapZoomDuration(config.zoomDuration.getSystemScaledDuration())
         setMinimumScaleType(config.minimumScaleType)
         setMinimumDpi(1) // Just so that very small image will be fit for initial load
@@ -246,11 +266,12 @@ open class ReaderPageImageView @JvmOverloads constructor(
                     // 5x zoom
                     setupZoom(config)
                     // Restore the pre-enhancement viewport after the new image has laid out.
-                    pendingViewport?.let { (scale, center) ->
-                        pendingViewport = null
+                    val viewport = pendingViewport
+                    pendingViewport = null
+                    viewport?.let { (scale, center) ->
                         setScaleAndCenter(scale, center ?: PointF(sWidth / 2f, sHeight / 2f))
                     }
-                    this@ReaderPageImageView.onNeedsLandscapeZoom()
+                    if (viewport == null) this@ReaderPageImageView.onNeedsLandscapeZoom()
                     this@ReaderPageImageView.onImageLoaded()
                 }
 

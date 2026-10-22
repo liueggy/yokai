@@ -133,6 +133,16 @@ class WebtoonAdapter(val viewer: WebtoonViewer) : RecyclerView.Adapter<RecyclerV
         }
     }
 
+    override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) {
+        super.onViewAttachedToWindow(holder)
+        viewer.updateEnhancementVisibility()
+    }
+
+    override fun onViewDetachedFromWindow(holder: RecyclerView.ViewHolder) {
+        (holder as? WebtoonPageHolder)?.setEnhancementVisible(false)
+        super.onViewDetachedFromWindow(holder)
+    }
+
     /**
      * Diff util callback used to dispatch delta updates instead of full dataset changes.
      */

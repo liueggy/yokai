@@ -13,7 +13,7 @@ data class EnhancementSpec(
     val denoise: Int = 0,
     val quality: String = "balanced",
     val scale: Int = 2,
-    val pipelineVersion: Int = 1,
+    val pipelineVersion: Int = 2,
 ) {
     init {
         require(sourceSha256.matches(SHA256))

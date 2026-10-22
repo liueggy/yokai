@@ -1,11 +1,17 @@
 package eu.kanade.tachiyomi.ui.setting.controllers
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
+import androidx.preference.Preference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.preference.PreferenceValues
 import eu.kanade.tachiyomi.data.preference.changesIn
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementModelStore
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementRuntime
+import eu.kanade.tachiyomi.ui.reader.enhancement.InstalledEnhancementModel
 import eu.kanade.tachiyomi.ui.reader.settings.OrientationType
 import eu.kanade.tachiyomi.ui.reader.settings.PageLayout
 import eu.kanade.tachiyomi.ui.reader.settings.ReaderBackgroundColor
@@ -19,6 +25,7 @@ import eu.kanade.tachiyomi.ui.setting.infoPreference
 import eu.kanade.tachiyomi.ui.setting.intListPreference
 import eu.kanade.tachiyomi.ui.setting.listPreference
 import eu.kanade.tachiyomi.ui.setting.multiSelectListPreferenceMat
+import eu.kanade.tachiyomi.ui.setting.onChange
 import eu.kanade.tachiyomi.ui.setting.onClick
 import eu.kanade.tachiyomi.ui.setting.preference
 import eu.kanade.tachiyomi.ui.setting.preferenceCategory
@@ -26,7 +33,12 @@ import eu.kanade.tachiyomi.ui.setting.switchPreference
 import eu.kanade.tachiyomi.util.lang.addBetaTag
 import eu.kanade.tachiyomi.util.system.DeviceUtil
 import eu.kanade.tachiyomi.util.system.isTablet
+import eu.kanade.tachiyomi.util.system.launchIO
+import eu.kanade.tachiyomi.util.system.toast
+import eu.kanade.tachiyomi.util.system.withUIContext
 import eu.kanade.tachiyomi.util.view.activityBinding
+import eu.kanade.tachiyomi.widget.preference.ListMatPreference
+import kotlinx.coroutines.CancellationException
 import uy.kohesive.injekt.injectLazy
 import yokai.domain.ui.settings.ReaderPreferences
 import yokai.domain.ui.settings.ReaderPreferences.CutoutBehaviour
@@ -40,6 +52,9 @@ import eu.kanade.tachiyomi.ui.setting.titleMRes as titleRes
 class SettingsReaderController : SettingsLegacyController() {
 
     private val readerPreferences: ReaderPreferences by injectLazy()
+    private var enhancementModelPreference: ListMatPreference? = null
+    private var importEnhancementModelPreference: Preference? = null
+    private var isImportingEnhancementModel = false
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) = screen.apply {
         titleRes = MR.strings.reader
@@ -79,6 +94,20 @@ class SettingsReaderController : SettingsLegacyController() {
                 titleRes = MR.strings.enhance_pages
                 summaryRes = MR.strings.enhance_pages_summary
                 defaultValue = false
+            }
+            enhancementModelPreference = listPreference(activity) {
+                bindTo(readerPreferences.enhancementModel())
+                titleRes = MR.strings.enhancement_model
+                onChange {
+                    EnhancementRuntime.invalidate()
+                    true
+                }
+            }
+            loadEnhancementModels()
+            importEnhancementModelPreference = preference {
+                titleRes = MR.strings.import_enhancement_model
+                summaryRes = MR.strings.import_enhancement_model_summary
+                onClick { openEnhancementModelPicker() }
             }
             intListPreference(activity) {
                 key = Keys.preloadSize
@@ -426,4 +455,86 @@ class SettingsReaderController : SettingsLegacyController() {
             }
         }
     }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != CODE_IMPORT_ENHANCEMENT_MODEL || resultCode != Activity.RESULT_OK) return
+        val uri = data?.data ?: return
+        val context = activity ?: return
+        if (isImportingEnhancementModel) return
+        setEnhancementImportInProgress(true)
+
+        viewScope.launchIO {
+            try {
+                val model = EnhancementModelStore.import(context, uri)
+                readerPreferences.enhancementModel().set(model.nameWithoutExtension)
+                EnhancementRuntime.invalidate()
+                val models = EnhancementModelStore.models(context)
+                withUIContext {
+                    refreshEnhancementModels(models)
+                    activity?.toast(MR.strings.enhancement_model_imported)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                withUIContext {
+                    activity?.toast(MR.strings.enhancement_model_import_failed)
+                }
+            } finally {
+                withUIContext { setEnhancementImportInProgress(false) }
+            }
+        }
+    }
+
+    private fun openEnhancementModelPicker() {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("*/*")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivityForResult(intent, CODE_IMPORT_ENHANCEMENT_MODEL)
+        } catch (_: ActivityNotFoundException) {
+            activity?.toast(MR.strings.file_picker_error)
+        }
+    }
+
+    private fun loadEnhancementModels() {
+        val context = activity ?: return
+        viewScope.launchIO {
+            val models = EnhancementModelStore.models(context)
+            withUIContext { refreshEnhancementModels(models) }
+        }
+    }
+
+    private fun refreshEnhancementModels(models: List<InstalledEnhancementModel>) {
+        val preference = enhancementModelPreference ?: return
+        preference.entries = models.map { model ->
+            if (model.isBundled) {
+                preference.context.getString(MR.strings.enhancement_model_bundled)
+            } else {
+                model.displayName
+            }
+        }
+        preference.entryValues = models.map { it.id }
+
+        val selectedId = readerPreferences.enhancementModel().get()
+        if (selectedId !in preference.entryValues) {
+            models.firstOrNull()?.id?.let {
+                readerPreferences.enhancementModel().set(it)
+                EnhancementRuntime.invalidate()
+            }
+        }
+        preference.preSummaryRes = null
+    }
+
+    private fun setEnhancementImportInProgress(importing: Boolean) {
+        isImportingEnhancementModel = importing
+        importEnhancementModelPreference?.apply {
+            isEnabled = !importing
+            title = context.getString(
+                if (importing) MR.strings.enhancement_model_importing else MR.strings.import_enhancement_model,
+            )
+        }
+    }
 }
+
+private const val CODE_IMPORT_ENHANCEMENT_MODEL = 506

@@ -1201,6 +1201,31 @@
     <string name="crash_screen_restart_application">Restart the application</string>
 
     <string name="refresh">Refresh</string>
-    <string name="enhance_pages">Enhance page quality</string>
-    <string name="enhance_pages_summary">Upscale pages locally while reading. Off by default; heavier pages take longer.</string>
+    <string name="enhance_pages">Enhance reading pages</string>
+    <string name="enhance_pages_summary">Improve page clarity locally for sharper text and artwork.</string>
+    <string name="enhancement_model">Enhancement model</string>
+    <string name="enhancement_model_bundled">Anime Lite</string>
+    <string name="import_enhancement_model">Import model</string>
+    <string name="import_enhancement_model_summary">Select a compatible ONNX super-resolution model from this device.</string>
+    <string name="enhancement_model_importing">Importing model…</string>
+    <string name="enhancement_model_imported">Model imported and selected</string>
+    <string name="enhancement_model_import_failed">Import failed. Select a compatible ONNX super-resolution model.</string>
+    <string name="reader_image_enhancement">Reading image enhancement</string>
+    <string name="enable_reader_image_enhancement">Enhance pages while reading</string>
+    <string name="manage_enhancement_models">Import or manage models</string>
+    <string name="enhancement_models_loading">Loading models…</string>
+    <string name="no_enhancement_models">No compatible model installed</string>
+    <string name="current_page_partial_preview">Current page detail preview</string>
+    <string name="original_image">Original</string>
+    <string name="enhanced_image">Enhanced</string>
+    <string name="test_current_page_partial">Test current page (detail)</string>
+    <string name="cancel_enhancement_test">Cancel test</string>
+    <string name="enhancement_preview_hint">Run a test to compare a detail crop from the current page. Pinch to inspect details.</string>
+    <string name="enhancement_preview_running">Enhancing the current page detail…</string>
+    <string name="enhancement_preview_success">Preview ready. Switch between the original and enhanced image, then pinch to inspect.</string>
+    <string name="enhancement_preview_duration">Enhancement time: %1$.2f seconds</string>
+    <string name="enhancement_preview_duration_note">Includes model loading and local detail processing; this is not a full-page benchmark.</string>
+    <string name="enhancement_preview_unsupported">This page cannot be previewed. It may be animated, unavailable, or too large.</string>
+    <string name="enhancement_preview_error">The preview failed. Try another model or page.</string>
+    <string name="enhancement_preview_cancelled">Preview cancelled</string>
 </resources>

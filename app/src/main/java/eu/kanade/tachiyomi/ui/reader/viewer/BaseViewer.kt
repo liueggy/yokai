@@ -3,6 +3,7 @@ package eu.kanade.tachiyomi.ui.reader.viewer
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementPreviewSource
 import eu.kanade.tachiyomi.ui.reader.model.ReaderPage
 import eu.kanade.tachiyomi.ui.reader.model.ViewerChapters
 
@@ -15,6 +16,12 @@ interface BaseViewer {
      * Returns the view this viewer uses.
      */
     fun getView(): View
+
+    /** The current transformed source, never a screenshot of an already enhanced page. */
+    suspend fun enhancementPreviewSource(): EnhancementPreviewSource?
+
+    /** Rebind images in place so enable/model changes also reach pages already on screen. */
+    fun refreshEnhancement()
 
     /**
      * Destroys this viewer. Called when leaving the reader or swapping viewers.

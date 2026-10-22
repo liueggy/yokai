@@ -14,6 +14,7 @@ import androidx.recyclerview.widget.WebtoonLayoutManager
 import co.touchlab.kermit.Logger
 import eu.kanade.tachiyomi.data.download.DownloadManager
 import eu.kanade.tachiyomi.ui.reader.ReaderActivity
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementPreviewSource
 import eu.kanade.tachiyomi.ui.reader.model.ChapterTransition
 import eu.kanade.tachiyomi.ui.reader.model.ReaderPage
 import eu.kanade.tachiyomi.ui.reader.model.ViewerChapters
@@ -32,7 +33,7 @@ class WebtoonViewer(val activity: ReaderActivity, val hasMargins: Boolean = fals
 
     val downloadManager: DownloadManager by injectLazy()
 
-    private val scope = MainScope()
+    internal val scope = MainScope()
 
     /**
      * Recycler view used by this viewer.
@@ -80,6 +81,7 @@ class WebtoonViewer(val activity: ReaderActivity, val hasMargins: Boolean = fals
             object : RecyclerView.OnScrollListener() {
                 override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                     onScrolled()
+                    updateEnhancementVisibility(restartDebounce = recyclerView.scrollState != RecyclerView.SCROLL_STATE_IDLE)
 
                     if (dy > config.menuThreshold || dy < -config.menuThreshold) {
                         activity.hideMenu()
@@ -268,6 +270,29 @@ class WebtoonViewer(val activity: ReaderActivity, val hasMargins: Boolean = fals
         }
     }
 
+    fun updateEnhancementVisibility(restartDebounce: Boolean = false) {
+        val viewportTop = recycler.paddingTop
+        val viewportBottom = recycler.height - recycler.paddingBottom
+        var selected: WebtoonPageHolder? = null
+        var selectedIntersection = 0
+
+        for (index in 0 until recycler.childCount) {
+            val child = recycler.getChildAt(index)
+            val holder = recycler.getChildViewHolder(child) as? WebtoonPageHolder ?: continue
+            val intersection = min(child.bottom, viewportBottom) - max(child.top, viewportTop)
+            if (child.isShown && intersection > selectedIntersection && holder.needsEnhancement()) {
+                selected = holder
+                selectedIntersection = intersection
+            }
+        }
+
+        for (index in 0 until recycler.childCount) {
+            val holder = recycler.getChildViewHolder(recycler.getChildAt(index)) as? WebtoonPageHolder ?: continue
+            val isSelected = holder === selected
+            holder.setEnhancementVisible(isSelected, restartDebounce && isSelected)
+        }
+    }
+
     /**
      * Scrolls up by [scrollDistance].
      */
@@ -332,6 +357,17 @@ class WebtoonViewer(val activity: ReaderActivity, val hasMargins: Boolean = fals
      * Notifies adapter of changes around the current page to trigger a relayout in the recycler.
      * Used when an image configuration is changed.
      */
+    override suspend fun enhancementPreviewSource(): EnhancementPreviewSource? {
+        val position = adapter.items.indexOf(currentPage)
+        val holder = recycler.findViewHolderForAdapterPosition(position) as? WebtoonPageHolder ?: return null
+        return holder.enhancementPreviewSource()
+    }
+
+    override fun refreshEnhancement() {
+        // Mark cached/off-screen holders too; otherwise scrolling back can show the previous model.
+        adapter.notifyItemRangeChanged(0, adapter.itemCount)
+    }
+
     private fun refreshAdapter() {
         val position = layoutManager.findLastEndVisibleItemPosition()
         adapter.notifyItemRangeChanged(

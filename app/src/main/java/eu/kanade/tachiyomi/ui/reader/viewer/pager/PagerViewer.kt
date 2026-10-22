@@ -13,6 +13,7 @@ import co.touchlab.kermit.Logger
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.download.DownloadManager
 import eu.kanade.tachiyomi.ui.reader.ReaderActivity
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementPreviewSource
 import eu.kanade.tachiyomi.ui.reader.model.ChapterTransition
 import eu.kanade.tachiyomi.ui.reader.model.InsertPage
 import eu.kanade.tachiyomi.ui.reader.model.ReaderChapter
@@ -22,7 +23,10 @@ import eu.kanade.tachiyomi.ui.reader.model.ViewerChapters
 import eu.kanade.tachiyomi.ui.reader.viewer.BaseViewer
 import eu.kanade.tachiyomi.ui.reader.viewer.ViewerNavigation
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import uy.kohesive.injekt.injectLazy
 
 /**
@@ -55,6 +59,8 @@ abstract class PagerViewer(val activity: ReaderActivity) : BaseViewer {
      * Currently active item. It can be a chapter page or a chapter transition.
      */
     private var currentPage: ReaderItem? = null
+
+    private var enhancementPrefetchDelayJob: Job? = null
 
     /**
      * Viewer chapters to set when the pager enters idle mode. Otherwise, if the view was settling
@@ -182,11 +188,18 @@ abstract class PagerViewer(val activity: ReaderActivity) : BaseViewer {
             .filterIsInstance(PagerPageHolder::class.java)
             .firstOrNull { it.item.first.index == page.index || it.item.second?.index == page.index }
 
+    fun isEnhancementActive(item: Pair<ReaderPage, ReaderPage?>): Boolean =
+        adapter.joinedItems.getOrNull(pager.currentItem) == item
+
     /**
      * Called when a new page (either a [ReaderPage] or [ChapterTransition]) is marked as active
      */
     fun onPageChange(position: Int) {
         val page = adapter.joinedItems.getOrNull(position)
+        pager.children.filterIsInstance<PagerPageHolder>().forEach { holder ->
+            holder.setEnhancementActive(holder.item == page)
+        }
+        updateEnhancementPrefetch()
         if (page != null && currentPage != page) {
             val pageF = page.first
             val allowPreload = checkAllowPreload(pageF as? ReaderPage)
@@ -215,6 +228,38 @@ abstract class PagerViewer(val activity: ReaderActivity) : BaseViewer {
                 is ChapterTransition -> onTransitionSelected(pageF)
                 else -> throw UnsupportedOperationException("${pageF::class.qualifiedName ?: "anonymous"} is not supported!")
             }
+        }
+    }
+
+    /** Schedules only the already-created holder for the next page in natural chapter order. */
+    fun updateEnhancementPrefetch() {
+        enhancementPrefetchDelayJob?.cancel()
+
+        val holders = pager.children.filterIsInstance<PagerPageHolder>().toList()
+        val activeItem = adapter.joinedItems.getOrNull(pager.currentItem)
+        holders.forEach { it.setEnhancementPrefetch(false) }
+
+        val activeHolder = holders.firstOrNull { it.item == activeItem } ?: return
+        if (!activeHolder.isEnhancementSettled()) return
+
+        val activePages = listOfNotNull(activeItem?.first as? ReaderPage, activeItem?.second as? ReaderPage)
+        val lastNaturalPage = activePages.maxByOrNull { it.index } ?: return
+        val nextIndex = lastNaturalPage.index + 1
+        val nextHolder = holders.firstOrNull { holder ->
+            listOfNotNull(holder.item.first, holder.item.second).any {
+                it.chapter == lastNaturalPage.chapter && it.index == nextIndex
+            } && holder.canPrefetchEnhancement()
+        } ?: return
+
+        enhancementPrefetchDelayJob = scope.launch {
+            delay(ENHANCEMENT_PREFETCH_DELAY_MS)
+            if (adapter.joinedItems.getOrNull(pager.currentItem) != activeItem ||
+                !activeHolder.isAttachedToWindow || !activeHolder.isEnhancementSettled() ||
+                !nextHolder.isAttachedToWindow || !nextHolder.canPrefetchEnhancement()
+            ) {
+                return@launch
+            }
+            nextHolder.setEnhancementPrefetch(true)
         }
     }
 
@@ -450,6 +495,14 @@ abstract class PagerViewer(val activity: ReaderActivity) : BaseViewer {
      * Resets the adapter in order to recreate all the views. Used when a image configuration is
      * changed.
      */
+    override suspend fun enhancementPreviewSource(): EnhancementPreviewSource? {
+        val item = adapter.joinedItems.getOrNull(pager.currentItem) ?: return null
+        return pager.children.filterIsInstance<PagerPageHolder>()
+            .firstOrNull { it.item == item }?.enhancementPreviewSource()
+    }
+
+    override fun refreshEnhancement() = refreshAdapter()
+
     private fun refreshAdapter() {
         val currentItem = pager.currentItem
         pager.adapter = adapter
@@ -521,3 +574,5 @@ abstract class PagerViewer(val activity: ReaderActivity) : BaseViewer {
         }
     }
 }
+
+private const val ENHANCEMENT_PREFETCH_DELAY_MS = 1_500L

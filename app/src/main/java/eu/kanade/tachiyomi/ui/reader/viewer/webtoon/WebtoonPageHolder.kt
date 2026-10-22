@@ -3,10 +3,12 @@ package eu.kanade.tachiyomi.ui.reader.viewer.webtoon
 import android.content.res.Resources
 import android.view.Gravity
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.FrameLayout
+import androidx.core.view.doOnLayout
 import androidx.core.view.isVisible
 import androidx.core.view.updateLayoutParams
 import androidx.core.view.updateMargins
@@ -15,7 +17,9 @@ import com.davemorrissey.labs.subscaleview.SubsamplingScaleImageView
 import eu.kanade.tachiyomi.databinding.ReaderErrorBinding
 import eu.kanade.tachiyomi.data.preference.PreferencesHelper
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementTrace
 import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementRuntime
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementPreviewSource
 import eu.kanade.tachiyomi.ui.reader.model.ReaderPage
 import eu.kanade.tachiyomi.ui.reader.viewer.ReaderErrorView
 import eu.kanade.tachiyomi.ui.reader.viewer.ReaderPageImageView
@@ -28,7 +32,7 @@ import eu.kanade.tachiyomi.util.system.withUIContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
@@ -76,10 +80,17 @@ class WebtoonPageHolder(
      */
     private var page: ReaderPage? = null
 
-    private val scope = MainScope()
+    private val scope = viewer.scope
 
     /** Latest enhancement attempt for this holder; cancelled when another page starts loading. */
     private var enhancementJob: Job? = null
+    private var enhancementBytes: ByteArray? = null
+    private var enhancementVisible = false
+    private var enhancementPrefetch = false
+    private var enhancementComplete = false
+    private var enhancementPrefetchAttempted = false
+    private var enhancementSourceResolved = false
+    private var enhancementSourceVersion = 0L
 
     private val preferences by injectLazy<PreferencesHelper>()
 
@@ -96,12 +107,34 @@ class WebtoonPageHolder(
         frame.onImageLoaded = { onImageDecoded() }
         frame.onImageLoadError = { onImageDecodeError() }
         frame.onScaleChanged = { viewer.activity.hideMenu() }
+        frame.doOnLayout { viewer.updateEnhancementVisibility() }
+        frame.addOnAttachStateChangeListener(
+            object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(view: View) {
+                    viewer.recycler.post { viewer.updateEnhancementVisibility() }
+                }
+
+                override fun onViewDetachedFromWindow(view: View) {
+                    setEnhancementVisible(false)
+                    setEnhancementPrefetch(false)
+                }
+            },
+        )
     }
 
     /**
      * Binds the given [page] with this view holder, subscribing to its state.
      */
     fun bind(page: ReaderPage) {
+        enhancementJob?.cancel()
+        enhancementJob = null
+        enhancementBytes = null
+        enhancementVisible = false
+        enhancementPrefetch = false
+        enhancementComplete = false
+        enhancementPrefetchAttempted = false
+        enhancementSourceResolved = false
+        enhancementSourceVersion++
         this.page = page
         loadJob?.cancel()
         loadJob = scope.launch { loadPageAndProcessStatus() }
@@ -124,6 +157,16 @@ class WebtoonPageHolder(
      * Called when the view is recycled and added to the view pool.
      */
     override fun recycle() {
+        enhancementJob?.cancel()
+        enhancementJob = null
+        enhancementBytes = null
+        enhancementVisible = false
+        enhancementPrefetch = false
+        enhancementComplete = false
+        enhancementPrefetchAttempted = false
+        enhancementSourceResolved = false
+        enhancementSourceVersion++
+        page = null
         loadJob?.cancel()
         loadJob = null
 
@@ -188,6 +231,12 @@ class WebtoonPageHolder(
      * Called when the page is ready.
      */
     private suspend fun setImage() {
+        enhancementJob?.cancel()
+        enhancementJob = null
+        enhancementComplete = false
+        enhancementPrefetchAttempted = false
+        enhancementSourceResolved = false
+        enhancementSourceVersion++
         progressContainer.isVisible = true
         progressIndicator.show()
         progressIndicator.completeAndFadeOut()
@@ -202,7 +251,11 @@ class WebtoonPageHolder(
             }
 
             // Peek keeps the display stream intact; enhancement needs the same encoded bytes.
-            val enhancementBytes = if (isAnimated) null else runCatching { source.peek().readByteArray() }.getOrNull()
+            val enhancementBytes = if (isAnimated || !readerPreferences.enhancePages().get()) {
+                null
+            } else {
+                runCatching { source.peek().readByteArray() }.getOrNull()
+            }
 
             withUIContext {
                 frame.setImage(
@@ -220,7 +273,9 @@ class WebtoonPageHolder(
                 removeErrorLayout()
             }
 
-            enhancementBytes?.let { requestEnhancement(it) }
+            this.enhancementBytes = enhancementBytes
+            enhancementSourceResolved = true
+            viewer.updateEnhancementVisibility()
         } catch (e: Throwable) {
             val logMsg = "Failed to set reader page image"
             if (e is CancellationException)
@@ -239,24 +294,126 @@ class WebtoonPageHolder(
      * Webtoon pages keep their aspect ratio when doubled, so the strip's layout height does not
      * change and the scroll position survives the swap. A slow or failing run leaves the original.
      */
-    private fun requestEnhancement(pageBytes: ByteArray) {
-        if (!readerPreferences.enhancePages().get()) return
+    fun setEnhancementVisible(visible: Boolean, restartDebounce: Boolean = false) {
+        enhancementVisible = visible
+        if (enhancementComplete) return
+        if (visible && restartDebounce) {
+            enhancementJob?.cancel()
+            enhancementJob = null
+        }
+        updateEnhancementDemand()
+    }
+
+    fun setEnhancementPrefetch(prefetch: Boolean) {
+        enhancementPrefetch = prefetch
+        updateEnhancementDemand()
+    }
+
+    fun needsEnhancement(): Boolean = enhancementBytes != null && !enhancementComplete
+
+    fun isEnhancementSettled(): Boolean =
+        enhancementSourceResolved && (enhancementBytes == null || enhancementComplete)
+
+    fun canPrefetchEnhancement(): Boolean =
+        enhancementBytes != null && !enhancementComplete && !enhancementPrefetchAttempted
+
+    private fun updateEnhancementDemand() {
+        if (!enhancementVisible && !enhancementPrefetch) {
+            enhancementJob?.cancel()
+            enhancementJob = null
+        } else if (!enhancementComplete && enhancementJob == null) {
+            requestEnhancement()
+        }
+    }
+
+    private fun requestEnhancement() {
+        if ((!enhancementVisible && !enhancementPrefetch) || enhancementComplete || !readerPreferences.enhancePages().get()) return
+        val pageBytes = enhancementBytes ?: return
 
         val targetPage = page ?: return
-        val renderer = EnhancementRuntime.renderer(frame.context)
-        val model = EnhancementRuntime.modelFor(frame.context, readerPreferences.enhancementModel().get())
+        val preferredModel = readerPreferences.enhancementModel().get()
         val denoise = readerPreferences.enhancementDenoise().get()
+        val sourceVersion = enhancementSourceVersion
 
-        enhancementJob?.cancel()
-        enhancementJob = scope.launch(Dispatchers.IO) {
+        if (enhancementJob != null) return
+        val job = scope.launch(Dispatchers.IO) {
+            delay(ENHANCEMENT_DEBOUNCE_MS)
+            if ((!enhancementVisible && !enhancementPrefetch) || sourceVersion != enhancementSourceVersion) return@launch
+            val prefetchOnly = !enhancementVisible
             val bitmap = runCatching {
-                renderer.render(pageBytes, model, model.id, "webtoon", denoise)
-            }.getOrNull() ?: return@launch
+                val binding = EnhancementRuntime.binding(frame.context, preferredModel) ?: return@runCatching null
+                // Visible requests may supply progress later; cache-only prefetch deliberately does not.
+                binding.renderer.render(
+                    pageBytes, binding.model, binding.model.id, "webtoon", denoise,
+                    priorityRegion = withUIContext { frame.enhancementVisibleRegion() },
+                    onProgress = if (prefetchOnly) null else { partial ->
+                        var accepted = false
+                        try {
+                            withUIContext {
+                                if (enhancementVisible && sourceVersion == enhancementSourceVersion &&
+                                    frame.isAttachedToWindow && readerPreferences.enhancePages().get() &&
+                                    readerPreferences.enhancementModel().get() == preferredModel
+                                ) {
+                                    frame.setEnhancedImage(partial)
+                                    accepted = true
+                                    EnhancementTrace.record("partial_display", "geometry" to "webtoon", "page" to targetPage.index)
+                                }
+                            }
+                        } finally {
+                            if (!accepted) partial.recycle()
+                        }
+                    },
+                )
+            }.getOrNull()
+            if (bitmap == null) {
+                // A budget/backend skip must not prevent other visible short pages being tried.
+                withUIContext {
+                    if (page === targetPage && sourceVersion == enhancementSourceVersion) {
+                        if (prefetchOnly) {
+                            enhancementPrefetchAttempted = true
+                        } else if (enhancementVisible) {
+                            enhancementComplete = true
+                        }
+                        frame.post { viewer.updateEnhancementVisibility() }
+                    }
+                }
+                return@launch
+            }
 
-            withUIContext {
-                // The holder may already show another page; drawing then would move the strip.
-                if (page === targetPage && frame.isAttachedToWindow) {
-                    frame.setEnhancedImage(bitmap)
+            var displayed = false
+            try {
+                withUIContext {
+                    // The holder may already show another page; drawing then would move the strip.
+                    if (enhancementVisible && sourceVersion == enhancementSourceVersion &&
+                        page === targetPage && frame.isAttachedToWindow && readerPreferences.enhancePages().get() &&
+                        readerPreferences.enhancementModel().get() == preferredModel
+                    ) {
+                        frame.setEnhancedImage(bitmap)
+                        enhancementComplete = true
+                        displayed = true
+                        EnhancementTrace.record("display", "geometry" to "webtoon", "page" to targetPage.index, "width" to bitmap.width, "height" to bitmap.height)
+                        frame.post { viewer.updateEnhancementVisibility() }
+                    } else if (prefetchOnly && sourceVersion == enhancementSourceVersion && page === targetPage) {
+                        enhancementPrefetchAttempted = true
+                    }
+                }
+            } finally {
+                if (!displayed) bitmap.recycle()
+            }
+        }
+        enhancementJob = job
+        job.invokeOnCompletion {
+            if (enhancementJob === job) enhancementJob = null
+        }
+    }
+
+    suspend fun enhancementPreviewSource(): EnhancementPreviewSource? {
+        val target = page ?: return null
+        val streamFn = target.stream ?: return null
+        return withIOContext {
+            streamFn().use { stream ->
+                process(Buffer().readFrom(stream)).use { source ->
+                    if (ImageUtil.isAnimatedAndSupported(source)) null else EnhancementPreviewSource.read(source, "webtoon")
                 }
             }
         }
@@ -338,3 +495,5 @@ class WebtoonPageHolder(
         }
     }
 }
+
+private const val ENHANCEMENT_DEBOUNCE_MS = 350L

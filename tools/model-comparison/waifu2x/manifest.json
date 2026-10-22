@@ -1,0 +1,53 @@
+{
+  "name": "waifu2x",
+  "architecture": "upconv_7/art/noise1_scale2.0x",
+  "source": "https://raw.githubusercontent.com/nagadomi/waifu2x/cc385f97a9debfe611316aabfd5d8bb30ba2dbeb/models/upconv_7/art/noise1_scale2.0x_model.json",
+  "source_sha256": "6c0688159ab0023619d1b0e472fead370619df1d36251f14f299edc43b30d1e3",
+  "sha256": "ab758dfa2e5a05ab55c7d3961acd2146a49f0938300d790c2b3a65af2b2d7fef",
+  "bytes": 2214086,
+  "scale": 2,
+  "license": "MIT",
+  "export": "opset17; replicate pad7 matching upstream clamp edges; leaky_relu0.1; unchanged JSON weights; final clamp0..1",
+  "tests": [
+    {
+      "input": [
+        1,
+        1
+      ],
+      "seconds": 0.0023822999792173505,
+      "max_abs_error": 5.364418029785156e-07
+    },
+    {
+      "input": [
+        16,
+        16
+      ],
+      "seconds": 0.002132299996446818,
+      "max_abs_error": 1.7881393432617188e-06
+    },
+    {
+      "input": [
+        32,
+        24
+      ],
+      "seconds": 0.005262400023639202,
+      "max_abs_error": 2.1457672119140625e-06
+    },
+    {
+      "input": [
+        128,
+        128
+      ],
+      "seconds": 0.11254900001222268,
+      "max_abs_error": 2.562999725341797e-06
+    },
+    {
+      "input": [
+        256,
+        256
+      ],
+      "seconds": 0.3086699999985285,
+      "max_abs_error": 2.9206275939941406e-06
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "name": "RealESRGAN-General-x4v3",
+    "file": "RealESRGAN-General-x4v3.onnx",
+    "sha256": "dbb0561758e0727c76b7bf6b539a988d3b3050d51f01dcf60c842de6e6add349",
+    "bytes": 4867430,
+    "scale": 4,
+    "source": "https://huggingface.co/Gaurox/frameshift-models/resolve/b4f8fa610edff25e059959fb478bd3879e26f7a7/upscale-video-onnx/realesr_general_x4v3.onnx",
+    "license": "BSD-3-Clause",
+    "desktop_load_seconds": 0.05661349999718368
+  },
+  {
+    "name": "RealESRGAN-Anime-6B",
+    "file": "RealESRGAN-Anime-6B.onnx",
+    "sha256": "1bccabc8e813ae287057c6dd342458c355e4505abe36b5e0b2b94807d39d40df",
+    "bytes": 17939940,
+    "scale": 4,
+    "source": "https://huggingface.co/Gaurox/frameshift-models/resolve/b4f8fa610edff25e059959fb478bd3879e26f7a7/upscale-image-onnx/realesrgan_x4plus_anime_6b.onnx",
+    "license": "BSD-3-Clause",
+    "desktop_load_seconds": 0.1017872000229545
+  }
+]

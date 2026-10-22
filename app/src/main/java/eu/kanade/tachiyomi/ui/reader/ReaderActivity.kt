@@ -95,6 +95,8 @@ import eu.kanade.tachiyomi.ui.reader.ReaderViewModel.SetAsCoverResult.AddToLibra
 import eu.kanade.tachiyomi.ui.reader.ReaderViewModel.SetAsCoverResult.Error
 import eu.kanade.tachiyomi.ui.reader.ReaderViewModel.SetAsCoverResult.Success
 import eu.kanade.tachiyomi.ui.reader.model.ReaderChapter
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementPreviewSource
+import eu.kanade.tachiyomi.ui.reader.enhancement.EnhancementRuntime
 import eu.kanade.tachiyomi.ui.reader.model.ReaderPage
 import eu.kanade.tachiyomi.ui.reader.model.ViewerChapters
 import eu.kanade.tachiyomi.ui.reader.settings.OrientationType
@@ -486,6 +488,7 @@ class ReaderActivity : BaseActivity<ReaderActivityBinding>() {
     override fun onDestroy() {
         super.onDestroy()
         viewer?.destroy()
+        EnhancementRuntime.invalidate()
         binding.chaptersSheet.chaptersBottomSheet.adapter = null
         viewer = null
         config = null
@@ -1308,9 +1311,22 @@ class ReaderActivity : BaseActivity<ReaderActivityBinding>() {
         super.onPause()
     }
 
+    private var appliedEnhancementSettings: Pair<Boolean, String>? = null
+
     override fun onResume() {
         super.onResume()
         viewModel.restartReadTimer()
+        val current = readerPreferences.enhancePages().get() to readerPreferences.enhancementModel().get()
+        if (appliedEnhancementSettings != null && appliedEnhancementSettings != current) refreshPageEnhancement()
+        appliedEnhancementSettings = current
+    }
+
+    suspend fun enhancementPreviewSource(): EnhancementPreviewSource? = viewer?.enhancementPreviewSource()
+
+    fun refreshPageEnhancement() {
+        appliedEnhancementSettings = readerPreferences.enhancePages().get() to readerPreferences.enhancementModel().get()
+        EnhancementRuntime.invalidate()
+        viewer?.refreshEnhancement()
     }
 
     fun reloadChapters(doublePages: Boolean, force: Boolean = false) {

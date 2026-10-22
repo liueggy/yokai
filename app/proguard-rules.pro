@@ -108,3 +108,6 @@
 # Firebase
 -keep class com.google.firebase.installations.** { *; }
 -keep interface com.google.firebase.installations.** { *; }
+
+# ONNX Runtime Java names are used by native JNI entry points.
+-keep class ai.onnxruntime.** { *; }

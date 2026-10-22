@@ -20,6 +20,10 @@ dependencyResolutionManagement {
     }
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        // Optional local artifact cache for environments where Maven Central is blocked.
+        providers.gradleProperty("localCentralRepository").orNull?.let { repositoryPath ->
+            maven(uri(repositoryPath))
+        }
         mavenCentral()
         google()
         maven("https://jitpack.io")

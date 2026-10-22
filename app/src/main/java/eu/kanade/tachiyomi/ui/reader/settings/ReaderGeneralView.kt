@@ -55,6 +55,9 @@ class ReaderGeneralView @JvmOverloads constructor(context: Context, attrs: Attri
             val backgroundColor = ReaderBackgroundColor.entries[position]
             preferences.readerTheme().set(backgroundColor.prefValue)
         }
+        binding.readerEnhancement.setOnClickListener {
+            ReaderEnhancementDialog(activity).show()
+        }
         binding.showPageNumber.bindToPreference(preferences.showPageNumber())
         binding.fullscreen.bindToPreference(preferences.fullscreen()) {
             updatePrefs()

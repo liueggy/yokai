@@ -408,6 +408,21 @@ val Context.localeContext: Context
     }
 
 fun setLocaleByAppCompat() {
+    val preferences = Injekt.get<PreferencesHelper>()
+    val initialized = preferences.preferenceStore.getBoolean("pref_chinese_ui_initialized", false)
+    if (!initialized.get()) {
+        initialized.set(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // This runs before the first AppCompat delegate has been registered.
+            val localeManager = preferences.context.getSystemService(android.app.LocaleManager::class.java)
+            if (localeManager.applicationLocales.isEmpty) {
+                localeManager.applicationLocales = android.os.LocaleList.forLanguageTags("zh-CN")
+            }
+        } else if (AppCompatDelegate.getApplicationLocales().isEmpty && !preferences.appLanguage().isSet()) {
+            preferences.appLanguage().set("zh-CN")
+            AppCompatDelegate.setApplicationLocales(androidx.core.os.LocaleListCompat.forLanguageTags("zh-CN"))
+        }
+    }
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
         AppCompatDelegate.getApplicationLocales().get(0)?.let { Locale.setDefault(it) }
     }
